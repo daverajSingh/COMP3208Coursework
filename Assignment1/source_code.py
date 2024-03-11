@@ -19,49 +19,34 @@ def loadData(file = None) :
                 timestamp = int(i[2])
                 data.append([userid, itemid, timestamp])
     return np.array(data)        
-        
+
+#Create a User Item Matrix from the data
 def createUserItemMatrix(data, isTraining=True):
-    users = data[:, 0]
-    items = data[:, 1]
-    
-    numberOfUsers = len(set(users))
-    numberOfItems = len(set(items))
-    
-    userItemMatrix = np.zeros((numberOfUsers, numberOfItems))
-    if isTraining:
-        for line in data:
-            userItemMatrix[line[0]-1, line[1]-1] = line[2]
-    return userItemMatrix
-
-def cosineSimilarity(UImatrix):
-    dotProduct = np.dot(UImatrix.T, UImatrix)
-    magnitude = np.sqrt(np.diag(dotProduct))
-    similarityMatrix = dotProduct / np.outer(magnitude, magnitude)
-    similarityMatrix[np.isnan(similarityMatrix)]=0
-    return similarityMatrix
-
-def recommenderSystem(itemSim, test, UIMatrix):
-    predictedRatings = []
-    
-    for user, item, timestamp in test:
-        userIdx = user -1
-        itemIdx = item -1
-        
-        itemSimilarity = itemSim[itemIdx]
-        
-        userRating = UIMatrix[userIdx]
-        
-        nonZero = userRating > 0
-        itemSimilarity = itemSimilarity * nonZero
-        
-        if np.sum(itemSimilarity) > 0:
-            predictedRating = np.dot(itemSimilarity, userRating)/np.sum(itemSimilarity)
+    users = np.unique(data[:,0])
+    items = np.unique(data[:,1])
+    UIMatrix = np.zeros((len(users), len(items)))
+    for i in range(len(data)):
+        userIndex = np.where(users == data[i,0])
+        itemIndex = np.where(items == data[i,1])
+        if isTraining:
+            UIMatrix[userIndex, itemIndex] = data[i,2]
         else:
-            predictedRating = np.mean(userRating[userRating > 0])
-        
-        predictedRatings.append((user, item, predictedRating, timestamp))
-                
-    return np.array(predictedRatings)
+            UIMatrix[userIndex, itemIndex] = 0
+    return UIMatrix
+
+# Item Based adjusted Cosine Similarity
+def cosineSimilarity(UImatrix):
+    similarityMatrix = np.zeros((UImatrix.shape[1], UImatrix.shape[1]))
+    for i in range(UImatrix.shape[1]):
+        for j in range(UImatrix.shape[1]):
+            if i == j:
+                similarityMatrix[i,j] = 1
+            else:
+                similarityMatrix[i,j] = np.dot(UImatrix[:,i], UImatrix[:,j])/(np.linalg.norm(UImatrix[:,i])*np.linalg.norm(UImatrix[:,j]))
+    return similarityMatrix
+    
+# Predicts the ratings for the test data
+def predictRating(trainUI, testUI, similarityMatrix):
 
 # Main
 if __name__ == '__main__':
@@ -69,8 +54,10 @@ if __name__ == '__main__':
     test = loadData("test_100k_withoutratings.csv")
     
     trainUIMatrix = createUserItemMatrix(train)
-    testUIMatrix = createUserItemMatrix(test, isTraining=False)
-    cosineSim = cosineSimilarity(trainUIMatrix)
-    predictions = recommenderSystem(test, cosineSim, trainUIMatrix)
+    testUIMatrix = createUserItemMatrix(test, False)
+    similarityMatrix = cosineSimilarity(trainUIMatrix)
+
     
-    print(predictions)
+    
+    print()
+    
