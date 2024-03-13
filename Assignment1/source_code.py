@@ -21,43 +21,78 @@ def loadData(file = None) :
     return np.array(data)        
 
 #Create a User Item Matrix from the data
-def createUserItemMatrix(data, isTraining=True):
-    users = np.unique(data[:,0])
-    items = np.unique(data[:,1])
-    UIMatrix = np.zeros((len(users), len(items)))
+def createUserItemMatrix(data, users, items, isTraining=True):
+    UIMatrix = np.zeros((users, items))
     for i in range(len(data)):
         userIndex = np.where(users == data[i,0])
         itemIndex = np.where(items == data[i,1])
         if isTraining:
             UIMatrix[userIndex, itemIndex] = data[i,2]
         else:
-            UIMatrix[userIndex, itemIndex] = 0
+            UIMatrix[userIndex, itemIndex] = 1
     return UIMatrix
 
-# Item Based adjusted Cosine Similarity
+# Item Based Adjusted Cosine Similarity
 def cosineSimilarity(UImatrix):
-    similarityMatrix = np.zeros((UImatrix.shape[1], UImatrix.shape[1]))
-    for i in range(UImatrix.shape[1]):
-        for j in range(UImatrix.shape[1]):
-            if i == j:
-                similarityMatrix[i,j] = 1
-            else:
-                similarityMatrix[i,j] = np.dot(UImatrix[:,i], UImatrix[:,j])/(np.linalg.norm(UImatrix[:,i])*np.linalg.norm(UImatrix[:,j]))
-    return similarityMatrix
-    
-# Predicts the ratings for the test data
+    sim = UImatrix.T @ UImatrix
+    norm = np.sqrt(np.diag(sim))
+    return (sim/norm[:, np.newaxis])/norm
+
+
+# Predicts the ratings for the test data 
 def predictRating(trainUI, testUI, similarityMatrix):
+    userMeans = np.true_divide(trainUI.sum(1), (trainUI != 0).sum(1))
+    normalisedTrainUI = np.where(trainUI != 0, trainUI - userMeans[:, np.newaxis], 0)
+    
+    predictNumerator = similarityMatrix @ normalisedTrainUI.T
+    predictDenominator = np.abs(similarityMatrix).sum(1).reshape(-1,1)
+    
+    predictDenominator[predictDenominator == 0] = 1
+    
+    predictionMatrix = predictNumerator/predictDenominator
+    
+    predictions = (predictionMatrix.T + userMeans[:, np.newaxis]) * (testUI == 1)
+    
+    return predictions
+    pass
+
+def getTimestamps(data):
+    numUsers = len(np.unique(data[:,0]))
+    numItems = len(np.unique(data[:,1]))
+    timestampArr = np.zeros((numUsers, numItems))
+    for i in range(len(data)):
+        userIndex = np.where(np.unique(data[:,0]) == data[i,0])
+        itemIndex = np.where(np.unique(data[:,1]) == data[i,1])
+        timestampArr[userIndex, itemIndex] = data[i,2]
+    return 
 
 # Main
 if __name__ == '__main__':
     train = loadData("train_100k_withratings.csv")
     test = loadData("test_100k_withoutratings.csv")
-    
-    trainUIMatrix = createUserItemMatrix(train)
-    testUIMatrix = createUserItemMatrix(test, False)
-    similarityMatrix = cosineSimilarity(trainUIMatrix)
+    timestampArr = getTimestamps(test)
 
+    numberUsers = np.maximum(len(np.unique(train[:,0])), len(np.unique(test[:,0])))
+    numberItems = np.maximum(len(np.unique(train[:,1])), len(np.unique(test[:,1])))
+    
+    trainUIMatrix = createUserItemMatrix(train, numberUsers, numberItems)
+    testUIMatrix = createUserItemMatrix(test, numberUsers, numberItems, False)
+    similarityMatrix = cosineSimilarity(trainUIMatrix)
+    predictedRatings = predictRating(trainUIMatrix, testUIMatrix, similarityMatrix)
+    
+    rows_to_write = []
+    user_ids = test[:, 0]
+    item_ids = test[:, 1]
+    
+    for (user_index, item_index), rating in np.ndenumerate(predictedRatings):
+        if rating > 0:
+            userid = user_ids[user_index]
+            itemid = item_ids[item_index]
+            timestamp = timestampArr[user_index][item_index] 
+            rows_to_write.append([userid, itemid, rating, timestamp])
     
     
-    print()
-    
+    with open("output.csv", "w") as f:
+        for row in rows_to_write:
+            f.write(','.join(map(str, row)) + '\n')
+        f.close()
