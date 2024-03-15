@@ -1,129 +1,151 @@
 import numpy as np
+from collections import defaultdict
 
-def loadCSV(file):
-    with open(file, 'r') as f:
-        data = f.readlines()
-    return np.array([line.strip().split(',') for line in data])
+# Load data from file
+def loadData(file):
+    return np.genfromtxt(file, delimiter=',', dtype=int)
 
-def meanCenteredRatingMatrix(data): 
-    users = data[:,0].astype(int).max(axis=0)
-    items = data[:,1].astype(int).max(axis=0)
-    matrix = np.zeros((users, items), dtype=np.float64)
-    for user, item, rating, _ in data:
-        matrix[int(user)-1, int(item)-1] = float(rating)    
-    mean = np.mean(matrix, axis=1).reshape((matrix.shape[0], 1))
-    ratings = matrix - mean
-    return ratings
+# Compute cosine similarity between items
+def cosineSimilarityItem(userItemMatrix):
+    dotProduct = np.dot(userItemMatrix.T, userItemMatrix)
+    magnitude = np.sqrt(np.sum(userItemMatrix.T ** 2, axis=1))
+    denominator = np.outer(magnitude, magnitude)
+    denominator[denominator == 0] = 1
+    similarityMatrix = dotProduct / denominator
+    np.fill_diagonal(similarityMatrix, 1)
+    return similarityMatrix
 
-def similarityMatrix(ratingMatrix):    
-    # Calculate the cosine similarity
-    sim_matrix = np.dot(ratingMatrix.T, ratingMatrix)
-    norms = np.linalg.norm(ratingMatrix.T, axis=1)
-    sim_matrix /= norms[:, np.newaxis]
-    sim_matrix /= norms[np.newaxis, :]
+# Compute cosine similarity between users
+def cosineSimilarityUser(userItemMatrix):
+    userItemMatrixNoNaN = np.nan_to_num(userItemMatrix)
+    dotProduct = np.dot(userItemMatrixNoNaN, userItemMatrixNoNaN.T)
+    magnitude = np.sqrt(np.sum(userItemMatrixNoNaN ** 2, axis=1))
+    denominator = np.outer(magnitude, magnitude)
+    denominator[denominator == 0] = 1
+    similarityMatrix = dotProduct / denominator
+    np.fill_diagonal(similarityMatrix, 1)
+    return similarityMatrix
 
-    # Handle division by zero
-    sim_matrix[np.isnan(sim_matrix)] = 0
-    np.fill_diagonal(sim_matrix, 1)  # Set self-similarity to 1
-    return sim_matrix
-       
-def itemBasedPrediction(user, item, ratingMatrix, similarityMatrix, k):
-    userId = user - 1
-    itemId = item - 1
-    
-    itemSim, indices = kSimilar(itemId, similarityMatrix, k)
-    
-    userRatings = ratingMatrix[userId, indices]
-    
-    ratedItemsMask = userRatings > 0
-    if ratedItemsMask.sum() == 0:
-        return np.mean(ratingMatrix[ratingMatrix>0])
-    
-    weightedSum = np.dot(userRatings[ratedItemsMask], itemSim[ratedItemsMask])
-    sumWeights = np.sum(itemSim[ratedItemsMask])
-    
-    prediction = weightedSum / sumWeights if sumWeights > 0 else np.mean(ratingMatrix[ratingMatrix > 0])   
-     
-    prediction = max(1, min(prediction, 5))
-    
-    return prediction
 
-def userBasedPrediction(user, item, ratingMatrix, similarityMatrix, k):
-    userId = user - 1
-    itemId = item - 1
+# Predict the rating of an item given user similarities
+def userPrediction(userSim, userItemMatrix, i, j, n=74):
+    usersWhoRatedItem = np.where(~np.isnan(userItemMatrix[:, j]))[0]
+    userSimilarites = userSim[i, :][usersWhoRatedItem]
     
-    userSim, indices = kSimilar(userId, similarityMatrix, k)
-    itemRatings = ratingMatrix[indices, itemId]
+    neighbourhoodIndices = np.where(((userSimilarites > 0.3)) & (userSimilarites != 0))[0]
+    sortedUserIndexes = np.argsort(-np.abs(userSimilarites[neighbourhoodIndices]))
     
-    ratedUsersMask = itemRatings > 0
-    if ratedUsersMask.sum() == 0:
-        return np.mean(ratingMatrix[ratingMatrix>0])
+    sortedUserIds = usersWhoRatedItem[neighbourhoodIndices][sortedUserIndexes]
+    sortedIndices = np.array(sortedUserIds[:n])
+    topIndices = sortedIndices[sortedIndices != i]
     
-    weightedSum = np.dot(itemRatings[ratedUsersMask], userSim[ratedUsersMask])
-    sumWeights = np.sum(userSim[ratedUsersMask])
+    neighbourhood = [userSim[index, i] for index in topIndices]
     
-    prediction = weightedSum / sumWeights if sumWeights > 0 else np.mean(ratingMatrix[ratingMatrix > 0])
+    numerator = denominator = 0
     
-    prediction = max(1, min(prediction, 5))
-    
-    return prediction
-    
-
-def kSimilar(item, similarityMatrix, k=5):
-    similar = []
-    indices = []
-    
-    similar = np.copy(similarityMatrix[item])
-    similar[item] = -np.inf
-    
-    indices = np.argsort(similar)[-k:]
-    
-    similar = similar[indices]
-    
-    return similar, indices
- 
-def calcWeights(userId, itemId, ratingMatrix):
-    userRatingCount = np.count_nonzero(ratingMatrix[userId-1,:])
-    itemRatingCount = np.count_nonzero(ratingMatrix[:,itemId-1])
+    for neighbour in topIndices:
+        similarity = userSim[neighbour, i]
+        rating = userItemMatrix[neighbour, j]
+        numerator += similarity * rating
+        denominator += abs(similarity)
         
-    userWeight = userRatingCount / (userRatingCount + itemRatingCount)
-    itemWeight = itemRatingCount / (userRatingCount + itemRatingCount)
+    if denominator == 0 or numerator == 0:
+        return 0, 0.7
     
-    return userWeight, itemWeight
+    weight = 0 
+    neighbourhoodSize = len(neighbourhood)
+    if neighbourhoodSize == 0:
+        weight = 0
+    elif neighbourhoodSize > 40:
+        weight = 1     
+    else:     
+        0.5 + 0.5 * np.exp(-0.16 * neighbourhoodSize)
+    
+    pred = numerator / denominator
+    pred = 0 if np.isnan(pred) else pred
+    return pred, weight
 
-if __name__ == "__main__":
-    train = loadCSV('train_100k_withratings.csv')
-    test = loadCSV('test_100k_withoutratings.csv')
-    print("Files loaded")
-    ratingMatrix = meanCenteredRatingMatrix(train)
-    print("Rating matrix made")
-    itemSimilarityMatrix = similarityMatrix(ratingMatrix)
-    userSimilarityMatrix = similarityMatrix(ratingMatrix.T)
-    print("Similarity Matrix Made")
+# Predict the rating of an item given item similarities
+def itemPrediction(itemSim, userItemMatrix, i, j, n=115):
+    similarities = itemSim[j, :]
+    similarities = [-50 if np.isnan(x) else similarities[i] for i, x in enumerate(userItemMatrix[i, :])]
+    similarities = [-50 if ((v > 0.3) or v == 0 or v == -50) else v for v in similarities]
+    
+    sortedIndices = sorted((index for index, value in enumerate(similarities) if value != -50), key=lambda i: abs(similarities[i]), reverse=True)
+    sortedIndices = np.array(sortedIndices[:n])
+    topIndices = sortedIndices[sortedIndices != j]
+    
+    neighbourhood = [itemSim[index, j] for index in topIndices]
+    
+    numerator = denominator = 0
+    
+    for neighbour in topIndices:
+        similarity = itemSim[neighbour, j]
+        rating = userItemMatrix[i, neighbour]
+        numerator += similarity * rating
+        denominator += abs(similarity)
+        
+    if denominator == 0 or numerator == 0:
+        return 0, 0.3
+    
+    weight = 0 
+    neighbourhoodSize = len(neighbourhood)
+    if neighbourhoodSize == 0:
+        weight = 0
+    elif neighbourhoodSize > 40:
+        weight = 1     
+    else:     
+        0.2 + 0.8 * np.exp(-0.16 * neighbourhoodSize)
+    
+    pred = numerator / denominator
+    pred = 0 if np.isnan(pred) else pred
+    return pred, weight
 
-    # Test on Training Data
-    predictionsTrain = []
-    k1 = 5
-    k2 = 3
-    for user, item, _, _ in train:
-        userW, itemW = calcWeights(int(user), int(item), ratingMatrix)
-        itemPrediction = itemBasedPrediction(int(user), int(item), ratingMatrix, itemSimilarityMatrix, k1)
-        userPrediction = userBasedPrediction(int(user), int(item), ratingMatrix, userSimilarityMatrix, k2)
-        predictedRating = round((userW * userPrediction + itemW * itemPrediction))
-        predictionsTrain.append(predictedRating)
+# Load data
+trainData = loadData("train_100k_withratings.csv")
+testData = loadData("test_100k_withoutratings.csv")
+testData = [list(map(int, values)) for values in testData if len(values) == 3]
+
+# Create user-item matrix
+allUserIdsArray = np.array(list(range(1, 944)))
+allItemIdsArray = np.array(list(range(1, 1683)))
+nUsers = len(allUserIdsArray)
+nItems = len(allItemIdsArray)
+
+userItemRatingsDict = defaultdict(dict)
+trainArray = np.array(trainData)
+for userId, itemId, rating in trainArray[:, :3].astype(np.float16):
+    userItemRatingsDict[userId][itemId] = rating
     
-    real = train[:, 2].astype(float)
-    pred = np.array(predictionsTrain)
-    print(np.abs(pred-real).mean())
+userItemMatrixTrain = np.full((nUsers, nItems), np.nan)
+for i, usr in enumerate(allUserIdsArray):
+    itemsForUser = userItemRatingsDict[usr]
+    indices = np.searchsorted(allItemIdsArray, list(itemsForUser.keys()))
+    userItemMatrixTrain[i, indices] = list(itemsForUser.values())
+
+# Normalize user-item matrix
+userMeans = np.nanmean(userItemMatrixTrain, axis=1)
+normalizedUserItemMatrix = userItemMatrixTrain.copy()
+nanMask = np.isnan(userItemMatrixTrain)
+for u in range(nUsers):
+    normalizedUserItemMatrix[u, ~nanMask[u]] -= userMeans[u]
+
+userItemMatrixTrain = normalizedUserItemMatrix
+userSimMatrix = cosineSimilarityUser(userItemMatrixTrain)
+itemSimMatrix = cosineSimilarityItem(userItemMatrixTrain)
+
+# Predict ratings 
+predictedRatings = {}
+for userId, itemId, timestamp in testData:
+    userPred, userQuality = userPrediction(userSimMatrix, userItemMatrixTrain, userId-1, itemId-1) + userMeans[userId-1]
+    itemPred, itemQuality = itemPrediction(itemSimMatrix, userItemMatrixTrain, userId-1, itemId-1) + userMeans[userId-1]
     
-    # predictions = []
-    # for user, item, timestamp in test:
-    #     predictedRating = (itemBasedPrediction(int(user), int(item), ratingMatrix, itemSimilarityMatrix) + userBasedPrediction(int(user), int(item), ratingMatrix, userSimilarityMatrix)) / 2
-    #     if np.isnan(predictedRating):
-    #         predictedRating = round(np.mean(ratingMatrix[ratingMatrix>0]))
-    #     else:
-    #         predictedRating = round(predictedRating)
-    #     predictions.append((user, item, predictedRating, timestamp))
-    # print("Saving to output.csv")
-    # np.savetxt('output.csv', predictions, delimiter=',', fmt='%s')
+    pred = ((userPred * userQuality) + (itemPred * itemQuality)) / (userQuality + itemQuality)
+    predictedRatings[(userId, itemId)] = (round(pred), timestamp)
     
+# Write predictions to file
+with open("output.csv", "w") as file:
+    for (userId, itemId), (pred, timestamp) in predictedRatings.items():
+        file.write(f"{userId},{itemId},{pred},{timestamp}\n")
+
+print("Done")    
