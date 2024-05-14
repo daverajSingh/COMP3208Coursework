@@ -21,10 +21,10 @@ def matrixToCSV(data, timestamps):
     return np.array(dataCSV)
 
 # Matrices
-def timestampMatrix(data):
-    timestamps = np.zeros(data.shape)
+def timestampMatrix(data, users, items):
+    timestamps = np.zeros((users, items))
     for row in data:
-        timestamps[row[0], row[1]] = row[3]
+        timestamps[int(row[0])-1, int(row[1])-1] = row[3].astype(np.uint64)
     return timestamps
 
 def userItemMatrix(data, users, items):
@@ -33,20 +33,78 @@ def userItemMatrix(data, users, items):
         userItemMatrix[int(row[0])-1, int(row[1])-1] = row[2].astype(np.float64)
     return userItemMatrix
 
-def predictionMatrix(data, users, items):
-    predictionMatrix = np.zeros((users, items))
-    for row in data:
-        predictionMatrix[int(row[0])-1, int(row[1])-1] = 1
-    return predictionMatrix
-
 # Matrix Factorisation
-def matrixFactorisation(userItemMatrix, k, learningRate, iterations):
-# Implement code here
-    ratings = []
+def matrixFactorisation(userItemMatrix, k, learningRate, iterations, regularisation):
+    """
+    Performs matrix factorisation using stochastic gradient descent.
+    
+    args:
+    userItemMatrix: matrix with users as rows and items as columns
+    k: number of latent features
+    learningRate: learning rate
+    iterations: number of iterations
+    regularisation: regularisation parameter
+    
+    returns:
+    P: user matrix
+    Q: item matrix
+    """
+    N = len(userItemMatrix)
+    M = len(userItemMatrix[0])
+    
+    # Randomly initialize user and item matrices
+    P = np.random.rand(N, k)
+    Q = np.random.rand(M, k)
+    
+    # Transpose Q for easier dot product calculation
+    Q = Q.T
+    
+    # SGD for given number of steps
+    for step in range(iterations):
+        for u in range(N):
+            for i in range(M):
+                if userItemMatrix[u, i] > 0:  # Only consider non-zero ratings
+                    eui = userItemMatrix[u, i] - np.dot(P[u, :], Q[:, i])
+                    for t in range(k):
+                        P[u, t] += learningRate * (2 * eui * Q[k, i] - regularisation * P[u, t])
+                        Q[t, i] += learningRate * (2 * eui * P[u, k] - regularisation * Q[t, i])
+        
+        # Calculate the error
+        e = 0
+        for u in range(N):
+            for i in range(M):
+                if userItemMatrix[u, i] > 0:
+                    e += pow(userItemMatrix[u, i] - np.dot(P[u, :], Q[:, i]), 2)
+                    for t in range(k):
+                        e += (regularisation / 2) * (pow(P[u, t], 2) + pow(Q[t, i], 2))
+        
+        if e < 0.001:
+            break
+    
+    return P, Q.T
+
+def getPredictions(predictedRatings, testData):
+    """
+    Get the predicted ratings for the test data.
+    
+    args:
+    predictedRatings: matrix with predicted ratings
+    testData: test data
+    
+    returns:
+    ratings: predicted ratings for the test data
+    """
+    ratings = np.zeros(testData.shape)
+    for row in testData:
+        ratings[row[0], row[1]] = predictedRatings[row[0]-1, row[1]-1]
     return ratings
 
-train = loadData('train_20M_withratings.csv')
-test = loadData('test_20M_withoutratings.csv')
+print("Loading data...")
+
+train = loadData('Assignment2/train_20M_withratings.csv')
+test = loadData('Assignment2/test_20M_withoutratings.csv')
+
+print("Data loaded.")
 
 usersTrain = int(np.max(train[:, 0]))
 itemsTrain = int(np.max(train[:, 1]))
@@ -55,14 +113,26 @@ itemsTest = int(np.max(test[:, 1]))
 totalUsers = max(usersTrain, usersTest)
 totalItems = max(itemsTrain, itemsTest)
 
-userItemMatrixTrain = userItemMatrix(train, totalUsers, totalItems)
-predictionMatrixTest = predictionMatrix(test, totalUsers, totalItems)
-timestamps = timestampMatrix(train)
+print("Making matrices...")
 
-P, Q = matrixFactorisation(userItemMatrixTrain, 20, 0.001, 100)
+userItemMatrixTrain = userItemMatrix(train, totalUsers, totalItems)
+timestamps = timestampMatrix(train, totalUsers, totalItems)
+
+print("Matrices made.")
+print("Starting matrix factorisation...")
+
+P, Q = matrixFactorisation(userItemMatrixTrain,)
+
+print("Matrix factorisation done.")
+print("Fetching ratings...")
+
 predictedRatings = np.dot(P, Q.T)
-predictedRatings = np.where(test == 1, predictedRatings)
+predictedRatings = getPredictions(predictedRatings, test)
+
+print("Ratings fetched.")
+print("Saving data...")
 
 ratings = matrixToCSV(predictedRatings, timestamps)
 saveData('output.csv', ratings)
 
+print("Data saved.")
